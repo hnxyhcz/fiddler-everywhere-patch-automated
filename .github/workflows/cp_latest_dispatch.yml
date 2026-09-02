@@ -470,11 +470,14 @@ jobs:
           }
 
           $index_content = Get-Content -Path $source_index -Raw
-          $updated_content = $index_content -replace 'const port = \d+;', "const port = $env:PATCH_SERVER_PORT;"
-          if ($updated_content -eq $index_content) {
+          $port_pattern = 'const port = \d+;'
+          if (-not [regex]::IsMatch($index_content, $port_pattern)) {
             throw "Could not find the port declaration in server/index.js"
           }
-          Set-Content -Path $source_index -Value $updated_content -Encoding utf8NoBOM
+          $updated_content = $index_content -replace $port_pattern, "const port = $env:PATCH_SERVER_PORT;"
+          if ($updated_content -ne $index_content) {
+            Set-Content -Path $source_index -Value $updated_content -Encoding utf8NoBOM
+          }
           Write-Host "Server port set to $env:PATCH_SERVER_PORT"
 
       - name: Set user credentials
