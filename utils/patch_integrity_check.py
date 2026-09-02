@@ -30,6 +30,9 @@ except Exception as exc:  # pragma: no cover
 TARGET_NS = "Fiddler.WebUi.Services"
 TARGET_TYPE = "IntegrityCheckService"
 TARGET_METHOD = "ExecuteAsync"
+SCRIPT_NS = "Fiddler.WebUi.Helpers"
+SCRIPT_TYPE = "ScriptHelper"
+SCRIPT_METHODS = ("TryOpenClientMainScript", "TryOpenElectronMainScript")
 TASK_TYPE = "System.Threading.Tasks.Task"
 TASK_COMPLETED = "get_CompletedTask"
 
@@ -317,6 +320,106 @@ def restore_file(path: Path, backup_suffix: str) -> int:
     return 0
 
 
+def find_type(dn, full_name: str):
+    matches = [td for td in iter_type_defs(dn) if type_full_name(td) == full_name]
+    if not matches:
+        raise RuntimeError(f"Specified type not found: {full_name}")
+    return matches[0]
+
+
+def patch_startup_checks(
+    path: Path,
+    *,
+    dry_run: bool,
+    backup_suffix: str,
+) -> int:
+    """Make ScriptHelper's startup file checks return success.
+
+    FE 8.1.0 calls both methods from Program.Main before and after starting
+    Kestrel. The methods have the signature:
+
+        bool Method(out string error)
+
+    Returning true while writing null to the out parameter avoids exit code
+    252 when the Electron package has been unpacked and app.asar is absent.
+    The target is located from .NET metadata, not a fixed RVA.
+    """
+
+    path = path.resolve()
+    data = bytearray(path.read_bytes())
+    dn = dnfile.dnPE(str(path))
+    try:
+        try:
+            script_type = find_type(dn, f"{SCRIPT_NS}.{SCRIPT_TYPE}")
+        except RuntimeError:
+            # FE 8.0.x does not have the 8.1.0 startup guards. Integrity
+            # patching has already completed, so this is not an error.
+            print("Startup checks:    ScriptHelper target not present; skipped")
+            return 0
+
+        targets = []
+        for method_name in SCRIPT_METHODS:
+            try:
+                method_index, method = find_method(script_type, method_name)
+            except RuntimeError:
+                print(f"Startup target:     {method_name} not present; skipped")
+                continue
+            body_offset = dn.get_offset_from_rva(method.Rva)
+            body = parse_method_body(data, body_offset)
+            targets.append((method_name, method_index, method, body))
+
+        if not targets:
+            print("Startup checks:    no startup targets present; skipped")
+            return 0
+
+        # ldarg.0; ldnull; stind.ref; ldc.i4.1; ret
+        il = bytes([0x02, 0x14, 0x51, 0x17, 0x2A])
+        new_body = bytes([(len(il) << 2) | 0x02]) + il
+        patches = []
+        for method_name, method_index, method, body in targets:
+            old_body_span = body.header_size + body.code_size
+            if old_body_span < len(new_body):
+                raise RuntimeError(f"Method body too small for {method_name}: {old_body_span} bytes")
+
+            print(f"Startup target:     {method_name}")
+            print(f"MethodDef token:    0x{(0x06000000 | method_index):08X}")
+            print(f"Method RVA:         0x{int(method.Rva):X}")
+            print(f"Method body offset: 0x{body.body_offset:X}")
+            print(f"Header kind:        {body.header_kind}")
+            print(f"Code size:          {body.code_size}")
+
+            start = body.body_offset
+            if data[start : start + len(new_body)] == new_body:
+                print("Status:             already patched")
+                continue
+            patches.append((start, old_body_span))
+
+        if not patches:
+            return 0
+        if dry_run:
+            print(f"Status:             dry-run only; {len(patches)} method(s) would change")
+            return 0
+
+        backup = path.with_name(path.name + backup_suffix)
+        if not backup.exists():
+            shutil.copy2(path, backup)
+            print(f"Backup:             {backup}")
+        else:
+            print(f"Backup:             {backup} (already exists)")
+
+        for start, old_body_span in patches:
+            data[start : start + old_body_span] = new_body + bytes(old_body_span - len(new_body))
+        path.write_bytes(data)
+        print(f"Status:             patched ({len(patches)} startup method(s))")
+        print(f"New SHA256:         {sha256(path)}")
+        return 0
+    finally:
+        try:
+            dn.close()
+        except Exception:
+            pass
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Generic Fiddler.WebUi.dll integrity-check patcher")
     parser.add_argument(
@@ -329,16 +432,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--restore", action="store_true", help="Restore from backup")
     parser.add_argument("--backup-suffix", default=".bak-integrity", help="Backup suffix")
     parser.add_argument("--type-full-name", help="Override target type full name if autodetection is ambiguous")
+    parser.add_argument(
+        "--skip-startup-checks",
+        action="store_true",
+        help="Only patch IntegrityCheckService; do not patch ScriptHelper startup checks",
+    )
     args = parser.parse_args(argv)
 
     path = Path(args.dll)
     if args.restore:
         return restore_file(path, args.backup_suffix)
-    return patch_file(
+    result = patch_file(
         path,
         dry_run=args.dry_run,
         type_full_name_override=args.type_full_name,
         backup_suffix=args.backup_suffix,
+    )
+    if result != 0 or args.skip_startup_checks:
+        return result
+    return patch_startup_checks(
+        path,
+        dry_run=args.dry_run,
+        backup_suffix=".bak-startup-check",
     )
 
 

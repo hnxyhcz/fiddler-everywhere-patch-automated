@@ -1,7 +1,9 @@
 ## [中文翻译版](README_CN.md)
 
-> [!WARNInG]
-> FE `v8.x.x` support is not yet automated here. You need to follow [parent-repo](https://github.com/msojocs/fiddler-everywhere-enhance)
+> [!IMPORTANT]
+> FE `v8.x.x` automation needs two extra steps: extract `resources/app.asar` before patching `main.js`, then patch `Fiddler.WebUi.dll` startup and periodic integrity checks. See [FE 8.x check patch notes](docs/fe8-integrity-check-fix.md).
+>
+> This fork now uses the repository's own `server/` files in GitHub Actions; it no longer depends on an external `msojocs` server checkout.
 
 # Fiddler Everywhere Patch (Automated)
 Guides you to Patch Fiddler Everywhere on Windows Automatically. 
@@ -38,15 +40,8 @@ This's the guide for applying patch automatically.
 > [!WARNING]
 > The new patch want to write files in a directory inside FE app itself. So you need to give write permissions in Linux. See [#27](https://github.com/auto-yui-patch/fiddler-everywhere-patch-automated/issues/27) for more. And feel free to drop your suggestion to automate the process.
 
-> [!IMPORTANT]
-> ### Update Notice: Support for Syncing forks with upstream repo: [READ MORE](#scheduled-syncing-forks-with-upstream-repo)
-
----
-
 ## Get Started.
  > [!TIP]
- > You must always check if your fork is up to date so no fails. (We reccomend you enable [Scheduled upstream pulling](#scheduled-syncing-forks-with-upstream-repo))
-
  * How even this Automated Patching Works?
    - Well, this automated patch do the same that you do mannually for patching. It downloads fiddler everywhere extract it. Remove, Replace, Edit, Move files and then, the patched application is ready.
 
@@ -91,28 +86,6 @@ This's the guide for applying patch automatically.
   * *Here how you do it...*
 
     https://github.com/user-attachments/assets/1e9fa214-b9c9-469c-83f0-e5ae4527d2f7
-
----
-
-### Scheduled Syncing Forks with Upstream Repo
-  FE Patch `1.0.8` adds support to sync your repo with upstream repo - scheduled (default: every 6 hours) 
-  > [!NOTE]
-  > Tnx: [lobe-chat](https://github.com/lobehub/lobe-chat) & [ous50](https://github.com/ous50)
-
-  > [!IMPORTANT]
-  >  - For this upstream pulling action to work, you need to enable [Upstream Sync](.github/workflows/cp_pull_upstream.yml) Github Action.
-  >  - And the action'll create an issue in your fork if pulling is unsuccesfull. So you need to enable `issues` for your fork with your repositories settings (`Settings` `-->` `General` `-->` `Features` `Issues`)
-  >  - For more information on how this action works: [lobe-chat's Sync Feature Wiki - en-US](https://github.com/lobehub/lobe-chat/wiki/Upstream-Sync) & [lobe-chat's Sync Feature Wiki - zh-CN](https://github.com/lobehub/lobe-chat/wiki/Upstream-Sync.zh-CN)
-
-  > [!TIP]
-  >  - You can change schedule by editing `- cron: '0 */6 * * *'` in [cp_pull_upstream.yml](.github/workflows/cp_pull_upstream.yml)
-  >  - For more information on `- cron` of Github Actions, visit [Github Documentation - Scheduling Actions](https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule)
-
-  > [!CAUTION]
-  >  - IF you use another method (maybe a Github App), to sync your forks with upstream repos, (for ex: [Pull by Wei](https://github.com/wei/pull)), you should disable the `Upstream Sync` action by going through, `Actions` `-->` `Upstream Sync` `-->` `Right Top Menu [...]` `-->` `Disable Workflow`
-  >  - For more information on how to disable a workflow: [Github Documentation on Disabling & Enabling Workflows](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-workflow-runs/disabling-and-enabling-a-workflow)
-
----
 
 > [!NOTE]
 > For Generic `Linux` and `MacOS` instructions, use [source repository](https://github.com/msojocs/fiddler-everywhere-enhance)

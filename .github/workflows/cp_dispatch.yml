@@ -215,49 +215,6 @@ jobs:
           path: Yui/
           if-no-files-found: error
 
-  download-msojocs-server:
-    runs-on: ubuntu-latest
-    needs: validate-version
-    
-    if: ${{ needs.validate-version.outputs.is_valid == 'true' }}
-
-    steps:
-      - name: Set up Git
-        run: |
-          git init
-          git remote add origin https://github.com/msojocs/fiddler-everywhere-enhance.git
-          git config core.sparseCheckout true
-
-      - name: Configure sparse-checkout to download the server directory
-        run: |
-          Set-Content -Path ".git/info/sparse-checkout" -Value "server"
-          $msojocsBranch = "main"
-          $patchingVersion = $env:VERSION_TO_PATCH
-          if ([string]::IsNullOrWhiteSpace($patchingVersion)) {
-            throw "VERSION_TO_PATCH is empty; cannot select msojocs branch"
-          }
-          if ([version]$patchingVersion -ge [version]"8.0.0") {
-            $msojocsBranch = "v8.x"
-          }
-          Write-Host "FE version to patch: $patchingVersion"
-          Write-Host "Using msojocs/fiddler-everywhere-enhance branch: $msojocsBranch"
-          git pull origin $msojocsBranch
-
-      - name: Move the downloaded directory to the target folder
-        run: |
-          mkdir -p msojocs
-          Move-Item -Path "server" -Destination "msojocs/"
-
-      - name: List files in the msojocs/server directory
-        run: Get-ChildItem -Path msojocs\server
-
-      - name: Upload msojocs folder as an artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: msojocs-patch
-          path: msojocs/
-          if-no-files-found: error
-
   download-fiddler-everywhere-windows:
     if: ${{ github.event.inputs.os-and-arch == 'Windows (x86_64)' }}
     runs-on: ubuntu-latest
@@ -394,7 +351,6 @@ jobs:
 
     needs:
       - download-Yui-patch
-      - download-msojocs-server
       - validate-version
       - download-fiddler-everywhere-windows
       - download-fiddler-everywhere-linux
@@ -414,12 +370,6 @@ jobs:
           name: Yui-patch
           path: Yui-patch
 
-      - name: Download msojocs-Server
-        uses: actions/download-artifact@v8
-        with:
-          name: msojocs-patch
-          path: msojocs-patch
-
       - name: Download FE
         uses: actions/download-artifact@v8
         with:
@@ -429,7 +379,7 @@ jobs:
       - name: List the contents of the downloaded artifacts
         run: |
           Get-ChildItem -Recurse Yui-patch
-          Get-ChildItem -Recurse msojocs-patch
+          Get-ChildItem -Recurse server
           Get-ChildItem -Recurse fe_app
 
       - name: Rename main FE folder
@@ -486,19 +436,24 @@ jobs:
 
       - name: Copy Server Folder
         run: |
-          $source_server_folder = "msojocs-patch/server/file"
+          $source_server_folder = "server/file"
           $destination_server_folder = "FE/resources/app/out"
+          $target_server_folder = Join-Path $destination_server_folder "file"
 
-          if (Test-Path $source_server_folder) {
-            Copy-Item -Path $source_server_folder -Destination $destination_server_folder -Recurse
-          } else {
-            Write-Host "Source Server Folder not found"
+          if (-not (Test-Path $source_server_folder)) {
+            throw "Source server/file not found"
           }
+
+          if (Test-Path $target_server_folder) {
+            Remove-Item -LiteralPath $target_server_folder -Recurse -Force
+          }
+          Copy-Item -Path $source_server_folder -Destination $destination_server_folder -Recurse
+          Write-Host "Copied repository server/file to $target_server_folder"
 
       - name: Enable Chinese translation
         if: startsWith(env.PATCH_LANGUAGE, 'Yes')
         run: |
-          $translate_js = "msojocs-patch/server/translate.js"
+          $translate_js = "server/translate.js"
           $dest_translate = "FE/resources/app/out/translate.js"
 
           if (Test-Path $translate_js) {
@@ -510,20 +465,26 @@ jobs:
 
       - name: Set patch server port (in main.js of server)
         run: |
-          $source_index = "msojocs-patch/server/index.js"
-          $index_content = Get-Content -Path $source_index -Raw
+          $source_index = "server/index.js"
 
-          if (Test-Path $source_index) {
-            $index_content = $index_content -replace 'const port = \d+;', "const port = $env:PATCH_SERVER_PORT;"
-            Set-Content -Path $source_index -Value $index_content
-            Write-Host "Server port set to $env:PATCH_SERVER_PORT"
-          } else {
-            Write-Host "index.js (from server) not found"
+          if (-not (Test-Path $source_index)) {
+            throw "server/index.js not found"
           }
+
+          $index_content = Get-Content -Path $source_index -Raw
+          $updated_content = $index_content -replace 'const port = \d+;', "const port = $env:PATCH_SERVER_PORT;"
+          if ($updated_content -eq $index_content) {
+            throw "Could not find the port declaration in server/index.js"
+          }
+          Set-Content -Path $source_index -Value $updated_content -Encoding utf8NoBOM
+          Write-Host "Server port set to $env:PATCH_SERVER_PORT"
 
       - name: Set user credentials
         run: |
           $source_json = "FE/resources/app/out/file/identity.getfiddler.com/oauth/token.json"
+          if (-not (Test-Path $source_json)) {
+            throw "User credential template not found: $source_json"
+          }
           $main_content = Get-Content -Path $source_json -Raw | ConvertFrom-Json
 
           $main_content.user_info.email = $env:PATCH_USER_EMAIL
@@ -537,24 +498,25 @@ jobs:
       - name: Patch main.js to main.original.js
         run: |
           $source_main = "FE/resources/app/out/main.js"
-          $main_content = Get-Content -Path $source_main -Raw
-
           $new_main = "FE/resources/app/out/main.original.js"
 
-          $source_index = "msojocs-patch/server/index.js"
-          $index_content = Get-Content -Path $source_index -Raw
-          
-          if ((Test-Path $source_main) -and (Test-Path $source_index)) {
-            Copy-Item -Path $source_main -Destination $new_main
-
-            $appended_content = $index_content + $main_content
-
-            Set-Content -Path $source_main -Value $appended_content
-          } else {
-            Write-Host "Source main.js or index.js (from server) not found"
+          $source_index = "server/index.js"
+          if (-not (Test-Path $source_main)) {
+            throw "FE main.js not found: $source_main"
+          }
+          if (-not (Test-Path $source_index)) {
+            throw "server/index.js not found"
           }
 
-      - name: Patch backend integrity check for FE 8.x
+          $main_content = Get-Content -Path $source_main -Raw
+          $index_content = Get-Content -Path $source_index -Raw
+          Copy-Item -Path $source_main -Destination $new_main -Force
+
+          $appended_content = $index_content + $main_content
+          Set-Content -Path $source_main -Value $appended_content -Encoding utf8NoBOM
+          Write-Host "Prepended repository server/index.js to $source_main"
+
+      - name: Patch FE 8.x WebUi checks
         run: |
           $patchingVersion = $env:VERSION_TO_PATCH
           if ([string]::IsNullOrEmpty($patchingVersion) -or [version]$patchingVersion -lt [version]"8.0.0") {
@@ -569,14 +531,6 @@ jobs:
 
           python -m pip install --disable-pip-version-check --no-input dnfile
           python "utils/patch_integrity_check.py" $dll
-
-      - name: Clean msojocs-patch
-        run: |
-          if (Test-Path msojocs-patch) {
-            Remove-Item -Path "msojocs-patch" -Recurse
-          } else {
-            Write-Host "msojocs-patch Folder not found"
-          }
 
       - name: Rename FE 
         id: rename-fe

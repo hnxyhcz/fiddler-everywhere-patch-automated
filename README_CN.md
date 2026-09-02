@@ -2,6 +2,11 @@
 指导您在 Windows 系统上自动为 Fiddler Everywhere 打补丁。
 > 父仓库：https://github.com/msojocs/fiddler-everywhere-enhance
 
+> [!IMPORTANT]
+> FE `v8.x.x` 自动化需要额外处理：先解包 `resources/app.asar` 再修改 `main.js`，然后补丁 `Fiddler.WebUi.dll` 的启动检查和周期完整性检查。详见 [FE 8.x 检查补丁说明](docs/fe8-integrity-check-fix.md)。
+>
+> 当前仓库已内置 `server/` 补丁文件，GitHub Actions 不再依赖外部 `msojocs` server checkout，而是直接使用仓库内的 `server/index.js` 和 `server/file/`。
+
 ## 特别说明：您也可以手动打补丁。请访问 [此仓库](https://github.com/sipsuru/fiddler-everywhere-patch-manual)
 
 ## 什么是补丁？如何使用？
@@ -32,15 +37,9 @@
 > [!WARNING]
 > 新补丁需要向前端（FE）应用目录内写入文件，因此您需要在 Linux 系统中授予相应的写入权限。更多详情请参阅议题 #27。如果您有任何关于自动化该流程的建议，也欢迎随时提出。
 
-> [!IMPORTANT]
-> ### 更新通知：支持同步 Fork 与上游仓库：[阅读更多](#scheduled-syncing-forks-with-upstream-repo)
-
 ---
 
 ## 快速开始
-> [!TIP]
-> 您应始终检查您的 Fork 是否是最新的，以避免失败。（我们推荐您启用 [定时上游同步](#scheduled-syncing-forks-with-upstream-repo)）
-
 * 自动化打补丁是如何工作的？
   - 该自动化补丁工具实现了与手动补丁相同的功能：它会下载 Fiddler Everywhere，解压缩、删除、替换、编辑、移动文件，最后生成已打补丁的应用程序。
 
@@ -84,26 +83,6 @@
   * *以下是操作示例...*
 
     https://github.com/user-attachments/assets/1e9fa214-b9c9-469c-83f0-e5ae4527d2f7
-
----
-
-### 定时同步 Fork 与上游仓库
-FE Patch 1.0.8 增加了定时（默认每 6 小时）同步 Fork 与上游仓库的功能。
-  > [!NOTE]
-  > 感谢：[lobe-chat](https://github.com/lobehub/lobe-chat) & [ous50](https://github.com/ous50)
-
-  > [!IMPORTANT]
-  > - 要启用此上游同步操作，您需要启用 [Upstream Sync](.github/workflows/cp_pull_upstream.yml) GitHub Action。
-  > - 如果同步失败，此操作会在您的 Fork 中创建一个 Issue。因此，您需要在仓库设置中启用 Issue 功能（设置 --> 常规 --> 功能：Issue）。
-  > - 了解更多关于此操作的信息：[lobe-chat 同步功能 Wiki - 英文](https://github.com/lobehub/lobe-chat/wiki/Upstream-Sync) & [lobe-chat 同步功能 Wiki - 中文](https://github.com/lobehub/lobe-chat/wiki/Upstream-Sync.zh-CN)
-
-  > [!TIP]
-  > - 您可以通过编辑 [cp_pull_upstream.yml](.github/workflows/cp_pull_upstream.yml) 中的 `cron: '0 */6 * * *'` 更改同步计划。
-  > - 了解更多关于 GitHub Actions 的调度计划，请访问 [GitHub 文档 - 调度操作](https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule)
-
-  > [!CAUTION]
-  > - 如果您使用其他方法（例如 GitHub App）同步 Fork 与上游仓库（如：[Pull by Wei](https://github.com/wei/pull)），应禁用上游同步操作（操作路径：Actions --> Upstream Sync --> 右上角菜单 [...] --> 禁用工作流）。
-  > - 了解更多关于禁用工作流的信息，请访问 [GitHub 文档 - 禁用和启用工作流](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-workflow-runs/disabling-and-enabling-a-workflow)
 
 ---
 
