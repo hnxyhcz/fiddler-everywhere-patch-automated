@@ -498,6 +498,9 @@ jobs:
 
           $main_content | ConvertTo-Json -Depth 5 | Set-Content -Path $source_json
 
+      - name: Patch Web UI endpoints
+        run: python "utils/patch_webui_assets.py" "FE/resources/app/out/WebServer/ClientApp/dist" --port "$env:PATCH_SERVER_PORT"
+
       - name: Patch main.js to main.original.js
         run: |
           $source_main = "FE/resources/app/out/main.js"

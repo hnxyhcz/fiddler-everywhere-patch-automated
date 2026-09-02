@@ -69,12 +69,6 @@ const port = 5678;
   const originalSpwan = sp.spawn
   sp.spawn = function(...args) {
     debugLog('Call spwan:', args[0])
-    if (args[0].includes('Fiddler.WebUi'))
-    {
-      // Keep the on-disk Web UI file original while the backend starts. The
-      // local endpoint rewrite is applied only when Electron loads index.html.
-      mainXHandle.reset()
-    }
     /**@type {dV.ChildProcessWithoutNullStreams} */
     const result = originalSpwan.apply(this, args)
     return result
@@ -151,7 +145,6 @@ const port = 5678;
       }
     });
     this.webContents.on("did-finish-load", (event, input) => {
-      mainXHandle.reset()
       this.webContents.executeJavaScript(`{
         const originalSome = Array.prototype.some
         Array.prototype.some = function(...args) {
