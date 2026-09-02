@@ -498,9 +498,6 @@ jobs:
 
           $main_content | ConvertTo-Json -Depth 5 | Set-Content -Path $source_json
 
-      - name: Patch Web UI endpoints
-        run: python "utils/patch_webui_assets.py" "FE/resources/app/out/WebServer/ClientApp/dist" --port "$env:PATCH_SERVER_PORT"
-
       - name: Patch main.js to main.original.js
         run: |
           $source_main = "FE/resources/app/out/main.js"
@@ -521,21 +518,6 @@ jobs:
           $appended_content = $index_content + $main_content
           Set-Content -Path $source_main -Value $appended_content -Encoding utf8NoBOM
           Write-Host "Prepended repository server/index.js to $source_main"
-
-      - name: Patch FE 8.x Backend SDK
-        run: |
-          $patchingVersion = $env:VERSION_TO_PATCH
-          if ([string]::IsNullOrEmpty($patchingVersion) -or [version]$patchingVersion -lt [version]"8.0.0") {
-            Write-Host "FE version $patchingVersion is below 8.0.0; skipping backend SDK patch"
-            exit 0
-          }
-
-          $dll = "FE/resources/app/out/WebServer/FiddlerBackendSDK.dll"
-          if (-not (Test-Path $dll)) {
-            throw "FiddlerBackendSDK.dll not found at $dll"
-          }
-
-          python "utils/patch_backend_sdk.py" $dll
 
       - name: Patch FE 8.x WebUi checks
         run: |
