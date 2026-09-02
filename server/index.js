@@ -5,224 +5,70 @@ const port = 5678;
   const path = require('path')
   const fs = require('fs')
   const sp = require('child_process')
+  const debug = process.env.FE_PATCH_DEBUG === '1'
+  const debugLog = (...args) => {
+    if (debug) console.info(...args)
+  }
 
   const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf-8'))
-  const resourceRoots = [
-    path.resolve(__dirname, '..'),
-    path.resolve(__dirname, '../../app.asar.unpacked'),
-  ]
-
-  const patchBinaryFile = (filePath, patcher, backupSuffix) => {
-    if (!fs.existsSync(filePath)) {
-      console.info('Patch target does not exist:', filePath)
-      return
+  let mainXJsPathCache = null
+  const getMainXJsPath = () => {
+    if (mainXJsPathCache) {
+      return mainXJsPathCache
     }
-    const original = fs.readFileSync(filePath)
-    const file = Buffer.from(original)
-    const changed = patcher(file)
-    if (!changed) {
-      return
+    const index = fs.readFileSync(path.resolve(__dirname, './WebServer/ClientApp/dist/index.html')).toString()
+    const match = index.match(/main.*?\.js/)
+    if (!match) {
+      throw new Error('Cannot find Web UI main JavaScript file in index.html')
     }
-    const backupPath = `${filePath}${backupSuffix}`
-    if (!fs.existsSync(backupPath)) {
-      fs.copyFileSync(filePath, backupPath)
-      console.info('Backup:', backupPath)
-    }
-    fs.writeFileSync(filePath, file)
-    console.info('Patched:', filePath)
+    mainXJsPathCache = path.resolve(__dirname, `./WebServer/ClientApp/dist/${match[0]}`)
+    return mainXJsPathCache
   }
 
-  const patchWebUi = (file) => {
-    let changed = false
-
-    // FE 8.1.0 checks these two files during startup and returns exit code
-    // 252 when the application was unpacked without app.asar. Both methods
-    // have the signature bool Method(out string error). Return true and clear
-    // the out parameter, while keeping the original method-body span.
-    const startupMethods = [
-      {
-        name: 'TryOpenClientMainScript',
-        original: Buffer.from('1b3006007009000087050011', 'hex'),
-        codeSize: 0x970,
-      },
-      {
-        name: 'TryOpenElectronMainScript',
-        original: Buffer.from('1b3006007807000088050011', 'hex'),
-        codeSize: 0x778,
-      },
-    ]
-    const startupBody = Buffer.from('16021451172a', 'hex')
-    for (const method of startupMethods) {
-      const pos = file.indexOf(method.original)
-      if (pos < 0) {
-        if (file.indexOf(startupBody) >= 0) {
-          console.info(`${method.name} patch already applied`)
-        } else {
-          console.warn(`${method.name} pattern not found`)
-        }
-        continue
-      }
-      const span = 12 + method.codeSize
-      startupBody.copy(file, pos)
-      file.fill(0, pos + startupBody.length, pos + span)
-      changed = true
-      console.info(`Patched ${method.name} at 0x${pos.toString(16)}`)
+  const writeIfChanged = (filePath, original, updated, label) => {
+    if (updated === original) {
+      debugLog(`${label}: no change needed`)
+      return false
     }
-
-    // Disable the 15-minute integrity-check hosted service. The 8.1.0
-    // method is a fat body with a 202-byte IL stream and uses MemberRef
-    // 0x0A0000AB for Task.get_CompletedTask.
-    const integrityOriginal = Buffer.from('13300300ca00000011010011', 'hex')
-    const integrityBody = Buffer.from('1a28ab00000a2a', 'hex')
-    const integrityPos = file.indexOf(integrityOriginal)
-    if (integrityPos >= 0) {
-      const span = 12 + 0xca
-      integrityBody.copy(file, integrityPos)
-      file.fill(0, integrityPos + integrityBody.length, integrityPos + span)
-      changed = true
-      console.info(`Patched IntegrityCheckService.ExecuteAsync at 0x${integrityPos.toString(16)}`)
-    } else if (file.indexOf(integrityBody) >= 0) {
-      console.info('IntegrityCheckService.ExecuteAsync patch already applied')
-    } else {
-      console.warn('IntegrityCheckService.ExecuteAsync pattern not found')
-    }
-    return changed
-  }
-
-  const patchBackendSdk = (file) => {
-    let changed = false
-    const cfgList = [
-      {
-        from: '6100700069002e0067006500740066006900640064006c00650072002e0062006500',
-        to: '3100320037002e0030002e0030002e00310000000000000000000000000000000000',
-      },
-      {
-        from: 'FF11001F118D3700000125',
-        to: 'FF11001F098D3700000125',
-      },
-      {
-        from: '6900640065006e0074006900740079002e0067006500740066006900640064006c00650072002e0062006500',
-        to: '3100320037002e0030002e0030002e0031000000000000000000000000000000000000000000000000000000',
-      },
-      {
-        from: '0011001F168D3700000125',
-        to: '0011001F098D3700000125',
-      },
-    ]
-
-    // The old patch assumed a fixed MemberRef token. FE 8.1.0 rebuilt its
-    // metadata and changed that token, so locate the instruction shape.
-    const findSignatureBranch = (firstByte) => {
-      const positions = []
-      for (let i = 0; i + 13 < file.length; i++) {
-        if (file[i] !== firstByte || file[i + 1] !== 0x2a || file[i + 2] !== 0x28) {
-          continue
-        }
-        const firstCall = file.readUInt32LE(i + 3)
-        const secondCall = file.readUInt32LE(i + 8)
-        if ((firstCall >>> 24) !== 0x0a || file[i + 7] !== 0x28 ||
-            (secondCall >>> 24) !== 0x0a || file[i + 12] !== 0x13) {
-          continue
-        }
-        positions.push(i)
-      }
-      return positions
-    }
-
-    const patchedSignature = findSignatureBranch(0x17)
-    const originalSignature = findSignatureBranch(0x16)
-    if (patchedSignature.length > 0) {
-      console.info(`Signature whitelist patch already applied at ${patchedSignature.map(x => `0x${x.toString(16)}`).join(', ')}`)
-    } else if (originalSignature.length === 1) {
-      file[originalSignature[0]] = 0x17
-      changed = true
-      console.info(`Patched signature whitelist branch at 0x${originalSignature[0].toString(16)}`)
-    } else if (originalSignature.length === 0) {
-      console.warn('Signature whitelist branch not found')
-    } else {
-      console.warn(`Found ${originalSignature.length} possible signature whitelist branches; skipped`)
-    }
-
-    for (const cfg of cfgList) {
-      const from = Buffer.from(cfg.from, 'hex')
-      const to = Buffer.from(cfg.to, 'hex')
-      const pos = file.indexOf(from)
-      if (pos < 0) {
-        if (file.indexOf(to) >= 0) {
-          console.info(`Backend patch already applied for ${cfg.from}`)
-        } else {
-          console.warn(`Backend patch pattern not found: ${cfg.from}`)
-        }
-        continue
-      }
-      to.copy(file, pos)
-      changed = true
-      console.info(`Backend patch applied at 0x${pos.toString(16)}: ${cfg.from}`)
-    }
-
-    const hostWhitelistPatches = [
-      {
-        name: 'NotifySetConfiguration host whitelist',
-        from: Buffer.from('7e1200000411006f2d00000a392e000000', 'hex'),
-        to: Buffer.from('3821000000000000000000000000000000', 'hex'),
-      },
-    ]
-    for (const cfg of hostWhitelistPatches) {
-      const pos = file.indexOf(cfg.from)
-      if (pos >= 0) {
-        cfg.to.copy(file, pos)
-        changed = true
-        console.info(`Backend host whitelist patch applied for ${cfg.name} at 0x${pos.toString(16)}`)
-      } else if (file.indexOf(cfg.to) >= 0) {
-        console.info(`Backend host whitelist patch already applied for ${cfg.name}`)
-      } else {
-        console.warn(`Backend host whitelist pattern not found: ${cfg.name}`)
-      }
-    }
-    return changed
+    fs.writeFileSync(filePath, updated)
+    debugLog(`${label}: updated`)
+    return true
   }
 
   const mainXHandle = {
     replace: () => {
       // 修改mian-xxx.js文件
-      console.info('Modify main-XXXXXXX.js (Or main.XXXXXXXXXXXXX.js in old versions)')
-      const index = fs.readFileSync(path.resolve(__dirname, './WebServer/ClientApp/dist/index.html')).toString()
-      const match = index.match(/main.*?\.js/)
-      const mainXJsPath = path.resolve(__dirname, `./WebServer/ClientApp/dist/${match}`)
+      debugLog('Modify main-XXXXXXX.js (Or main.XXXXXXXXXXXXX.js in old versions)')
+      const mainXJsPath = getMainXJsPath()
       let mainXJs = fs.readFileSync(mainXJsPath).toString()
       // FE 8.1.0 may spell these endpoints with either ".com" or ".be".
       // Always use a local URL with the original host in the path; this does
       // not require a system hosts-file modification.
-      mainXJs = mainXJs.replace(/https:\/\/api\.getfiddler\.(?:com|be)/g, `http://127.0.0.1:${port}/api.getfiddler.com`)
-      mainXJs = mainXJs.replace(/https:\/\/identity\.getfiddler\.(?:com|be)/g, `http://127.0.0.1:${port}/identity.getfiddler.com`)
+      const updated = mainXJs
+        .replace(/https:\/\/api\.getfiddler\.(?:com|be)/g, `http://127.0.0.1:${port}/api.getfiddler.com`)
+        .replace(/https:\/\/identity\.getfiddler\.(?:com|be)/g, `http://127.0.0.1:${port}/identity.getfiddler.com`)
       // "https://","api",".get","fiddler",".com"
-      mainXJs = mainXJs.replace(new RegExp(`"https://","api",".get","fiddler","\\.(?:com|be)"`, 'g'), `"http://127.0.0.1:${port}/","api",".get","fiddler",".com"`)
-      mainXJs = mainXJs.replace(new RegExp(`"https://","identity",".get","fiddler","\\.(?:com|be)"`, 'g'), `"http://127.0.0.1:${port}/","identity",".get","fiddler",".com"`)
+        .replace(new RegExp(`"https://","api",".get","fiddler","\\.(?:com|be)"`, 'g'), `"http://127.0.0.1:${port}/","api",".get","fiddler",".com"`)
+        .replace(new RegExp(`"https://","identity",".get","fiddler","\\.(?:com|be)"`, 'g'), `"http://127.0.0.1:${port}/","identity",".get","fiddler",".com"`)
 
-      fs.writeFileSync(mainXJsPath, mainXJs)
+      writeIfChanged(mainXJsPath, mainXJs, updated, 'Web UI endpoint patch')
     },
     reset: () => {
       // 还原mian-xxx.js文件
-      console.info('Recover main-XXXXXXX.js (Or main.XXXXXXXXXXXXX.js in old versions)')
-      const index = fs.readFileSync(path.resolve(__dirname, './WebServer/ClientApp/dist/index.html')).toString()
-      const match = index.match(/main.*?\.js/)
-      console.info('Match result:', match)
-      const mainXJsPath = path.resolve(__dirname, `./WebServer/ClientApp/dist/${match}`)
+      debugLog('Recover main-XXXXXXX.js (Or main.XXXXXXXXXXXXX.js in old versions)')
+      const mainXJsPath = getMainXJsPath()
       let mainXJs = fs.readFileSync(mainXJsPath).toString()
-      mainXJs = mainXJs.replace(new RegExp(`http://127\\.0\\.0\\.1:\\d+/`, 'g'), 'https://')
-      mainXJs = mainXJs.replace(new RegExp(`"http://","api"`, 'g'), '"https://","api"')
-      mainXJs = mainXJs.replace(new RegExp(`"http://","identity"`, 'g'), '"https://","identity"')
-      mainXJs = mainXJs.replace(new RegExp(`",".get","fiddler","\\.be(?::\\d+)?"`, 'g'), `",".get","fiddler",".com"`)
-      fs.writeFileSync(mainXJsPath, mainXJs)
+      const updated = mainXJs
+        .replace(new RegExp(`http://127\\.0\\.0\\.1:\\d+/`, 'g'), 'https://')
+        .replace(new RegExp(`"http://","api"`, 'g'), '"https://","api"')
+        .replace(new RegExp(`"http://","identity"`, 'g'), '"https://","identity"')
+        .replace(new RegExp(`",".get","fiddler","\\.be(?::\\d+)?"`, 'g'), `",".get","fiddler",".com"`)
+      writeIfChanged(mainXJsPath, mainXJs, updated, 'Web UI endpoint reset')
     }
   }
   const originalSpwan = sp.spawn
   sp.spawn = function(...args) {
-    console.info('Call spwan:', args[0])
-    if (args[0].includes('Fiddler.WebUi'))
-    {
-      mainXHandle.reset()
-    }
+    debugLog('Call spwan:', args[0])
     /**@type {dV.ChildProcessWithoutNullStreams} */
     const result = originalSpwan.apply(this, args)
     return result
@@ -245,7 +91,7 @@ const port = 5678;
             }
           }
         }
-        console.info('HookedBrowserWindow:', options)
+        debugLog('HookedBrowserWindow:', options)
       }catch(e) {
 
       }
@@ -291,7 +137,7 @@ const port = 5678;
   BrowserWindow.prototype.loadURL = function(...args){
     this.setMinimumSize(300, 300);
     // this.webContents.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) bilibili_pc/1.9.1 Chrome/98.0.4758.141 Electron/17.4.11 Safari/537.36')
-    console.info('Call loadURL', args)
+    debugLog('Call loadURL', args)
     // DevTools切换
     this.webContents.on("before-input-event", (event, input) => {
       if (input.key === "F12" && input.type === "keyUp") {
@@ -299,7 +145,6 @@ const port = 5678;
       }
     });
     this.webContents.on("did-finish-load", (event, input) => {
-      mainXHandle.reset()
       this.webContents.executeJavaScript(`{
         const originalSome = Array.prototype.some
         Array.prototype.some = function(...args) {
@@ -329,23 +174,11 @@ const port = 5678;
 
   // version 8.x
   if (Number(pkg.version.split('.')[0]) >= 8){
-    for (const root of resourceRoots) {
-      patchBinaryFile(
-        path.join(root, 'out', 'WebServer', 'FiddlerBackendSDK.dll'),
-        patchBackendSdk,
-        '.bak-signing',
-      )
-      patchBinaryFile(
-        path.join(root, 'out', 'WebServer', 'Fiddler.WebUi.dll'),
-        patchWebUi,
-        '.bak-startup-check',
-      )
-    }
     const U = global.URL
     global.URL = class extends U {
       constructor(u, base) {
         super(u, base)
-        console.info('new URL -> ', u)
+        debugLog('new URL -> ', u)
         if (u.includes('http://') && u.includes('getfiddler') && (u.endsWith('.com') || u.endsWith(`:${port}`))) {
           this.protocol = 'https:'
           this.port = ''
@@ -381,14 +214,14 @@ const port = 5678;
     const fullPath = req.url
     const url = new URL(fullPath, `http://127.0.0.1:${port}`)
     let host = req.headers.host.split(':')[0]
-    console.log(req.method, host, url.pathname)
+    debugLog(req.method, host, url.pathname)
     if (host.endsWith('.be')) {
       host = host.replace('.be', '.com')
     }
     if (host.includes('getfiddler.com')) {
       url.pathname = `/${host}${url.pathname}`
     }
-    console.info('request header:', JSON.stringify(req.headers))
+    debugLog('request header:', JSON.stringify(req.headers))
     // let body = '';
     // req.on('data', chunk => {
     //   body += chunk.toString();
@@ -419,8 +252,7 @@ const port = 5678;
           data = body
           const signData = Object.keys(headers).map(k => `${k}:${headers[k]}`).join('\n') + body
           // console.log('原始数据：', signData)
-          const signPriKey = await subtle.importKey('pkcs8', priKey, { name: "ECDSA", namedCurve: "P-256" }, true, ['sign'])
-          // console.log('signPriKey ok')
+          const signPriKey = key.privateKey
           const bodyBuf = Buffer.from(signData, 'binary')
           // console.log('signData length:', bodyBuf.length)
           const signature = await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, signPriKey, bodyBuf)
