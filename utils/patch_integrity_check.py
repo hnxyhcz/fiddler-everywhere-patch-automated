@@ -409,15 +409,18 @@ def patch_startup_checks(
 
         for start, old_body_span in patches:
             data[start : start + old_body_span] = new_body + bytes(old_body_span - len(new_body))
-        path.write_bytes(data)
-        print(f"Status:             patched ({len(patches)} startup method(s))")
-        print(f"New SHA256:         {sha256(path)}")
-        return 0
     finally:
         try:
             dn.close()
         except Exception:
             pass
+
+    # Close dnfile before replacing the DLL. On Windows, writing while the PE
+    # mapping is still alive can fail even when the path itself is valid.
+    path.write_bytes(data)
+    print(f"Status:             patched ({len(patches)} startup method(s))")
+    print(f"New SHA256:         {sha256(path)}")
+    return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
