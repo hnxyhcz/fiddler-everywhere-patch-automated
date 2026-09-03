@@ -462,13 +462,22 @@
   }
   const isSkipEle = (ele) => {
     // 删除试用期提示
+    document.querySelector('.days-remaining')?.parentElement?.remove();
+    // TRIAL 替换为 专业版
+    document.querySelectorAll('.badge-warning')?.forEach(el => {
+      if (el.textContent.trim() === 'TRIAL') {
+        el.textContent = '专业版';
+        el.classList.replace('badge-warning', 'badge-accent');
+      }
+    });
+    // 除立即购买
     const text = ele.textContent?.trim() || '';
     if (text === 'Buy Now' || text === '立即购买') {
-      ele.parentNode.remove()
+      ele.remove()
       return true;
     }
-    // if (text.startsWith('Trial expires in') || text.startsWith('试用期还剩')) {
-    //   ele.remove()
+    // if (text === 'Buy Now' || text === '立即购买') {
+    //   ele.parentNode.remove()
     //   return true;
     // }
 
